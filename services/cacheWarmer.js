@@ -29,11 +29,9 @@ class CacheWarmerService {
   async warmMitraExtendedCache() {
     if (this.cache.isWarming.mitraExtended) {
       console.log('⏳ MitraExtended cache warming already in progress');
-      
       while (this.cache.isWarming.mitraExtended) {
         await new Promise(resolve => setTimeout(resolve, 500));
       }
-      
       return this.cache.mitraExtended;
     }
 
@@ -43,13 +41,43 @@ class CacheWarmerService {
       const startTime = Date.now();
 
       const projection = {
-        driver_id: 1, name: 1, phone_number: 1, city: 1, status: 1,
-        attendance: 1, bank_info_provided: 1, app_version_name: 1,
-        last_active: 1, hubs: 1, businesses: 1, nik: 1,
-        bank_name: 1, bank_account_number: 1, bank_account_holder: 1,
-        vehicle: 1, lark_status: 1, lark_tanggal_keluar_unit: 1, 
-        lark_nomor_plat: 1, lark_merk_unit: 1, current_lat: 1, 
-        current_lon: 1, sim_number: 1, reason: 1, updated_at: 1, _id: 0
+        driver_id: 1,
+        name: 1,
+        phone_number: 1,
+        city: 1,
+        status: 1,
+        attendance: 1,
+        bank_info_provided: 1,
+        app_version_name: 1,
+        last_active: 1,
+        registered_at: 1,
+        hubs: 1,
+        businesses: 1,
+        hub_data: 1,
+        business_data: 1,
+        nik: 1,
+        sim_number: 1,
+        sim_expiry: 1,
+        bank_name: 1,
+        bank_account_number: 1,
+        bank_account_holder: 1,
+        vehicle: 1,
+        operating_division: 1,
+        remark: 1,
+        reason: 1,
+        lark_status: 1,
+        lark_tanggal_keluar_unit: 1,
+        lark_nomor_plat: 1,
+        lark_merk_unit: 1,
+        lark_alamat: 1,
+        lark_tanggal_pengembalian_unit: 1,
+        lark_lama_pemakaian: 1,
+        current_lat: 1,
+        current_lon: 1,
+        date_photo: 1,
+        doc_photo: 1,
+        updated_at: 1,
+        _id: 0
       };
 
       const data = await MitraExtended.find({}, projection)
@@ -78,14 +106,12 @@ class CacheWarmerService {
 
   async warmShipmentCacheByYear(year) {
     const yearKey = String(year);
-    
+
     if (this.cache.isWarming.shipmentData[yearKey]) {
       console.log(`⏳ Shipment cache for year ${year} already warming`);
-      
       while (this.cache.isWarming.shipmentData[yearKey]) {
         await new Promise(resolve => setTimeout(resolve, 500));
       }
-      
       return this.cache.shipmentData[yearKey];
     }
 
@@ -95,7 +121,7 @@ class CacheWarmerService {
       const startTime = Date.now();
 
       const query = { delivery_date: { $regex: `/${year}$` } };
-      
+
       const data = await ShipmentPerformance.find(query)
         .select('client_name project_name delivery_date drop_point hub order_code weight distance_km mitra_code mitra_name receiving_date vehicle_type cost sla weekly')
         .lean()
@@ -332,18 +358,10 @@ class CacheWarmerService {
   }
 
   getCachedData(key) {
-    if (key === 'mitraExtended') {
-      return this.cache.mitraExtended;
-    }
-    if (key === 'shipmentStats') {
-      return this.cache.shipmentStats;
-    }
-    if (key === 'shipmentFilters') {
-      return this.cache.shipmentFilters;
-    }
-    if (key === 'availableYears') {
-      return this.cache.availableYears;
-    }
+    if (key === 'mitraExtended') return this.cache.mitraExtended;
+    if (key === 'shipmentStats') return this.cache.shipmentStats;
+    if (key === 'shipmentFilters') return this.cache.shipmentFilters;
+    if (key === 'availableYears') return this.cache.availableYears;
     return null;
   }
 
@@ -397,58 +415,51 @@ class CacheWarmerService {
 
   clearCache(type = 'all') {
     console.log(`🗑️ Clearing cache: ${type}...`);
-    
+
     if (type === 'all' || type === 'mitraExtended') {
       this.cache.mitraExtended = null;
       this.cache.lastUpdated.mitraExtended = null;
     }
-    
     if (type === 'all' || type === 'shipmentData') {
       this.cache.shipmentData = {};
       this.cache.lastUpdated.shipmentData = {};
     }
-    
     if (type === 'all' || type === 'shipmentStats') {
       this.cache.shipmentStats = null;
       this.cache.lastUpdated.shipmentStats = null;
     }
-    
     if (type === 'all' || type === 'shipmentFilters') {
       this.cache.shipmentFilters = null;
       this.cache.lastUpdated.shipmentFilters = null;
     }
-    
     if (type === 'all' || type === 'availableYears') {
       this.cache.availableYears = null;
       this.cache.lastUpdated.availableYears = null;
     }
-    
+
     console.log(`✅ Cache cleared: ${type}`);
   }
 
   async refreshCache(type = 'all') {
     console.log(`🔄 Refreshing cache: ${type}...`);
-    
+
     if (type === 'all' || type === 'mitraExtended') {
       this.clearCache('mitraExtended');
       await this.warmMitraExtendedCache();
     }
-    
     if (type === 'all' || type === 'shipmentStats') {
       this.clearCache('shipmentStats');
       await this.warmShipmentStatsCache();
     }
-    
     if (type === 'all' || type === 'shipmentFilters') {
       this.clearCache('shipmentFilters');
       await this.warmShipmentFiltersCache();
     }
-    
     if (type === 'all' || type === 'availableYears') {
       this.clearCache('availableYears');
       await this.warmAvailableYearsCache();
     }
-    
+
     console.log(`✅ Cache refreshed: ${type}`);
   }
 

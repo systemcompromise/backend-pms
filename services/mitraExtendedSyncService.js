@@ -8,22 +8,25 @@ try {
   if (!fetchNikFromLark) throw new Error('fetchNikFromLark is not exported from larkController');
 } catch (err) {
   console.error('Warning: larkController import failed:', err.message);
-  fetchNikFromLark = async () => {
-    console.warn('fetchNikFromLark unavailable, returning empty array');
-    return [];
-  };
+  fetchNikFromLark = async () => [];
 }
 
 const getRideblitzConfig = () => ({
   BASE_URL: process.env.RIDEBLITZ_BASE_URL || 'https://driver-api.rideblitz.id',
   AUTH_TOKEN: process.env.RIDEBLITZ_AUTH_TOKEN,
   BANK_API_URL: process.env.RIDEBLITZ_BANK_API_URL || 'https://user.rideblitz.id/v1/app/users/bank_detail/drivers',
-  TIMEOUT: 15000,
+  TIMEOUT: 30000,
   BATCH_SIZE: 200,
   CONCURRENT_REQUESTS: 5,
   PAGINATION_OFFSET: 200,
   MAX_PAGES: 500
 });
+
+const getBearerToken = () => {
+  const token = process.env.RIDEBLITZ_AUTH_TOKEN;
+  if (!token) return null;
+  return token.startsWith('Bearer ') ? token : `Bearer ${token}`;
+};
 
 class CancellationToken {
   constructor() {
@@ -72,16 +75,12 @@ const formatDateTime = (dateString) => {
   }
 };
 
-const formatHubBusinessData = (data) => {
-  if (!data || typeof data !== 'object' || Object.keys(data).length === 0) return '';
-  return Object.entries(data).map(([id, name]) => `${name} (${id})`).join(', ');
-};
-
 const fetchAllDriversWithPagination = async (progressCallback, cancellationToken) => {
   const config = getRideblitzConfig();
+  const authHeader = getBearerToken();
 
-  if (!config.AUTH_TOKEN) {
-    throw new Error('RIDEBLITZ_AUTH_TOKEN environment variable is not set. Please configure it in your .env file.');
+  if (!authHeader) {
+    throw new Error('RIDEBLITZ_AUTH_TOKEN environment variable is not set.');
   }
 
   const allDrivers = [];
@@ -101,36 +100,22 @@ const fetchAllDriversWithPagination = async (progressCallback, cancellationToken
     if (cancellationToken.isCancelled) break;
 
     try {
-      const source = axios.CancelToken.source();
+      const params = new URLSearchParams();
+      params.append('sort', '-1');
+      [1, 2, 8, 3, 4, 5, 6, 7].forEach(s => params.append('status', s));
+      params.append('attendance', '');
+      params.append('page', currentPage);
+      params.append('offset', OFFSET);
+      params.append('term', '');
+      params.append('app_version_name', '');
+      params.append('bank_info_provided', 'undefined');
 
-      const response = await axios.get(`${config.BASE_URL}/v2/panel/driver-list`, {
-        params: {
-          sort: -1,
-          status: [1, 2, 8, 3, 4, 5, 6, 7],
-          attendance: '',
-          page: currentPage,
-          offset: OFFSET,
-          term: '',
-          app_version_name: '',
-          bank_info_provided: 'undefined'
-        },
-        paramsSerializer: (params) => {
-          const parts = [];
-          for (const [key, value] of Object.entries(params)) {
-            if (Array.isArray(value)) {
-              value.forEach(v => parts.push(`${key}=${encodeURIComponent(v)}`));
-            } else {
-              parts.push(`${key}=${encodeURIComponent(value)}`);
-            }
-          }
-          return parts.join('&');
-        },
+      const response = await axios.get(`${config.BASE_URL}/v2/panel/driver-list?${params.toString()}`, {
         headers: {
-          Authorization: config.AUTH_TOKEN,
+          Authorization: authHeader,
           Accept: 'application/json'
         },
-        timeout: config.TIMEOUT,
-        cancelToken: source.token
+        timeout: config.TIMEOUT
       });
 
       cancellationToken.throwIfCancelled();
@@ -154,27 +139,33 @@ const fetchAllDriversWithPagination = async (progressCallback, cancellationToken
         break;
       }
     } catch (error) {
-      if (axios.isCancel(error) || error.isCancelled || cancellationToken.isCancelled) break;
+      if (error.isCancelled || cancellationToken.isCancelled) break;
       if (error.response?.status === 401) {
-        throw new Error('Rideblitz API authentication failed. Token may be expired. Please update RIDEBLITZ_AUTH_TOKEN in environment variables.');
+        throw new Error('Rideblitz API authentication failed. Token may be expired. Please update RIDEBLITZ_AUTH_TOKEN.');
+      }
+      if (error.response?.status === 403) {
+        throw new Error('Rideblitz API access denied. Check token permissions.');
       }
       console.error(`Error fetching page ${currentPage}:`, error.message);
+      if (currentPage === 1) {
+        throw new Error(`Failed to fetch drivers from Rideblitz: ${error.message}`);
+      }
       break;
     }
   }
 
-  console.log(`Total drivers fetched: ${allDrivers.length}`);
   return allDrivers;
 };
 
 const fetchBankDetails = async (userId, cancellationToken) => {
   const config = getRideblitzConfig();
-  if (cancellationToken.isCancelled || !userId) return null;
+  const authHeader = getBearerToken();
+  if (cancellationToken.isCancelled || !userId || !authHeader) return null;
 
   try {
     const response = await axios.get(`${config.BANK_API_URL}/${userId}`, {
       headers: {
-        Authorization: config.AUTH_TOKEN,
+        Authorization: authHeader,
         Accept: 'application/json'
       },
       timeout: config.TIMEOUT
@@ -197,12 +188,13 @@ const fetchBankDetails = async (userId, cancellationToken) => {
 
 const fetchDriverProfileFromRideblitz = async (driverId, userId, cancellationToken) => {
   const config = getRideblitzConfig();
-  if (cancellationToken.isCancelled) return null;
+  const authHeader = getBearerToken();
+  if (cancellationToken.isCancelled || !authHeader) return null;
 
   try {
     const response = await axios.get(`${config.BASE_URL}/panel/driver-profile/${driverId}`, {
       headers: {
-        Authorization: config.AUTH_TOKEN,
+        Authorization: authHeader,
         Accept: 'application/json'
       },
       timeout: config.TIMEOUT
@@ -258,6 +250,18 @@ const matchNikWithLarkData = (driverProfile, larkDataArray) => {
   };
 };
 
+const getStatusDisplay = (status) => {
+  const statusMap = {
+    registered: 'Registered',
+    active: 'Active',
+    pending: 'Pending Verification',
+    new: 'New',
+    inactive: 'Inactive',
+    banned: 'Banned'
+  };
+  return statusMap[status?.toLowerCase()] || status || '-';
+};
+
 const processBatchProfiles = async (batchIds, driverList, larkData, cancellationToken) => {
   if (cancellationToken.isCancelled) return [];
 
@@ -284,19 +288,6 @@ const processBatchProfiles = async (batchIds, driverList, larkData, cancellation
       const driverInfo = driverList.find(item => String(item.drivers?.id) === String(profile.driver_id));
       const driverData = driverInfo?.drivers || {};
       const accountState = driverData.account_state || {};
-
-      const getStatusDisplay = (status) => {
-        const statusMap = {
-          registered: 'Registered',
-          active: 'Active',
-          pending: 'Pending Verification',
-          new: 'New',
-          inactive: 'Inactive',
-          banned: 'Banned'
-        };
-        return statusMap[status?.toLowerCase()] || status || '-';
-      };
-
       const larkMatch = matchNikWithLarkData(profile, larkData);
 
       const updateData = {
@@ -314,8 +305,12 @@ const processBatchProfiles = async (batchIds, driverList, larkData, cancellation
         android_version: driverData.android_version || '',
         last_active: formatDateTime(driverData.last_active),
         registered_at: formatDateTime(driverInfo?.registered_at),
-        hubs: formatHubBusinessData(profile.hub_data),
-        businesses: formatHubBusinessData(profile.business_data),
+        hubs: profile.hub_data && Object.keys(profile.hub_data).length > 0
+          ? Object.entries(profile.hub_data).map(([id, name]) => `${name} (${id})`).join(', ')
+          : '',
+        businesses: profile.business_data && Object.keys(profile.business_data).length > 0
+          ? Object.entries(profile.business_data).map(([id, name]) => `${name} (${id})`).join(', ')
+          : '',
         reason: driverData.reason || '',
         current_lat: profile.current_lat,
         current_lon: profile.current_lon,
@@ -375,10 +370,10 @@ const saveBatchToDatabase = async (batchProfiles, cancellationToken) => {
 };
 
 const manualSyncMitraExtended = async (syncId, progressCallback) => {
-  const config = getRideblitzConfig();
+  const authHeader = getBearerToken();
 
-  if (!config.AUTH_TOKEN) {
-    throw new Error('RIDEBLITZ_AUTH_TOKEN is not configured. Please add it to your .env file: RIDEBLITZ_AUTH_TOKEN=your_token_here');
+  if (!authHeader) {
+    throw new Error('RIDEBLITZ_AUTH_TOKEN is not configured. Please add it to your .env file.');
   }
 
   const startTime = Date.now();
@@ -390,12 +385,28 @@ const manualSyncMitraExtended = async (syncId, progressCallback) => {
     progressCallback?.({ stage: 'init', message: 'Initializing sync process...', percentage: 0 });
 
     const driverList = await fetchAllDriversWithPagination(progressCallback, cancellationToken);
-    if (cancellationToken.isCancelled) throw Object.assign(new Error('Sync cancelled during driver fetch'), { isCancelled: true });
+
+    if (cancellationToken.isCancelled) {
+      throw Object.assign(new Error('Sync cancelled during driver fetch'), { isCancelled: true });
+    }
+
+    if (!driverList || driverList.length === 0) {
+      throw new Error('No drivers fetched from Rideblitz. Check API token and connectivity.');
+    }
 
     progressCallback?.({ stage: 'lark_fetch', message: 'Fetching data from Larksuite...', percentage: 20 });
 
-    const larkData = await fetchNikFromLark();
-    if (cancellationToken.isCancelled) throw Object.assign(new Error('Sync cancelled during Lark fetch'), { isCancelled: true });
+    let larkData = [];
+    try {
+      larkData = await fetchNikFromLark();
+    } catch (larkError) {
+      console.warn('Lark data fetch failed, continuing without Lark matching:', larkError.message);
+      larkData = [];
+    }
+
+    if (cancellationToken.isCancelled) {
+      throw Object.assign(new Error('Sync cancelled during Lark fetch'), { isCancelled: true });
+    }
 
     progressCallback?.({ stage: 'validation', message: 'Validating and transforming data...', percentage: 30 });
 
@@ -410,18 +421,25 @@ const manualSyncMitraExtended = async (syncId, progressCallback) => {
     let successCount = 0;
     let larkMatchCount = 0;
     const totalDrivers = driverIds.length;
+    const config = getRideblitzConfig();
     const BATCH_SIZE = config.BATCH_SIZE;
 
     for (let i = 0; i < totalDrivers; i += BATCH_SIZE) {
       if (cancellationToken.isCancelled) {
-        throw Object.assign(new Error(`Sync cancelled - ${successCount} records saved`), { isCancelled: true, successCount });
+        throw Object.assign(
+          new Error(`Sync cancelled - ${successCount} records saved`),
+          { isCancelled: true, successCount }
+        );
       }
 
       const batchIds = driverIds.slice(i, i + BATCH_SIZE);
       const batchProfiles = await processBatchProfiles(batchIds, driverList, larkData, cancellationToken);
 
       if (cancellationToken.isCancelled) {
-        throw Object.assign(new Error(`Sync cancelled - ${successCount} records saved`), { isCancelled: true, successCount });
+        throw Object.assign(
+          new Error(`Sync cancelled - ${successCount} records saved`),
+          { isCancelled: true, successCount }
+        );
       }
 
       if (batchProfiles.length > 0) {
@@ -449,7 +467,10 @@ const manualSyncMitraExtended = async (syncId, progressCallback) => {
     }
 
     if (cancellationToken.isCancelled) {
-      throw Object.assign(new Error(`Sync cancelled - ${successCount} records saved`), { isCancelled: true, successCount });
+      throw Object.assign(
+        new Error(`Sync cancelled - ${successCount} records saved`),
+        { isCancelled: true, successCount }
+      );
     }
 
     progressCallback?.({ stage: 'finalizing', message: 'Finalizing sync process...', percentage: 95 });
@@ -474,9 +495,12 @@ const manualSyncMitraExtended = async (syncId, progressCallback) => {
     return summary;
 
   } catch (error) {
-    if (error.isCancelled || cancellationToken.isCancelled || error.message.includes('cancel')) {
+    if (error.isCancelled || cancellationToken.isCancelled) {
       const savedCount = error.successCount || 0;
-      throw Object.assign(new Error(`Sync cancelled by user - ${savedCount} records saved`), { isCancelled: true, successCount: savedCount });
+      throw Object.assign(
+        new Error(`Sync cancelled by user - ${savedCount} records saved`),
+        { isCancelled: true, successCount: savedCount }
+      );
     }
     throw error;
   } finally {
