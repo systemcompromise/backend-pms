@@ -1,6 +1,4 @@
 const axios = require('axios');
-const path = require('path');
-const fs = require('fs');
 const ProspectPartner = require('../models/ProspectPartner');
 
 const GMAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
@@ -13,11 +11,19 @@ const EXCEL_HEADER_MAP = {
   Occupation: 'occupation',
   Company_Name: 'companyName',
   Work_Duration: 'workDuration',
-  PIC: 'pic',
-  Reason: 'reason',
+  Proof_Image: 'proofImage',
+  Preparation_Date: 'preparationDate',
+  Assigned_To: 'assignedTo',
+  Reason: 'notes',
+  Notes: 'notes',
+  Previous_Income: 'previousIncome',
+  Performance_Rating: 'performanceRating',
+  Status: 'eligibilityStatus',
 };
 
 const ELIGIBILITY_STATUSES = ['Eligible', 'Need Review', 'Not Eligible', 'Potential Partner'];
+const PERFORMANCE_RATINGS = ['Basic', 'Standard', 'Advanced', 'Professional', 'Elite', ''];
+const ASSIGNED_TO_OPTIONS = ['Putra', 'Septa', 'Fuja', 'Fitra', 'Arina', 'Jisman'];
 
 const PROVINCE_MAP = {
   'West Java': 'Jawa Barat',
@@ -64,11 +70,6 @@ const KABUPATEN_KOTA_MAP = {
   'South Jakarta': 'Kota Jakarta Selatan',
   'North Jakarta': 'Kota Jakarta Utara',
   'Central Jakarta': 'Kota Jakarta Pusat',
-  'Jakarta Barat': 'Kota Jakarta Barat',
-  'Jakarta Timur': 'Kota Jakarta Timur',
-  'Jakarta Selatan': 'Kota Jakarta Selatan',
-  'Jakarta Utara': 'Kota Jakarta Utara',
-  'Jakarta Pusat': 'Kota Jakarta Pusat',
   'South Tangerang': 'Kota Tangerang Selatan',
   'South Tangerang City': 'Kota Tangerang Selatan',
   'Tangerang City': 'Kota Tangerang',
@@ -84,51 +85,6 @@ const KABUPATEN_KOTA_MAP = {
   'Semarang': 'Kota Semarang',
   'Makassar City': 'Kota Makassar',
   'Makassar': 'Kota Makassar',
-  'Palembang City': 'Kota Palembang',
-  'Palembang': 'Kota Palembang',
-  'Batam City': 'Kota Batam',
-  'Batam': 'Kota Batam',
-  'Yogyakarta City': 'Kota Yogyakarta',
-  'Yogyakarta': 'Kota Yogyakarta',
-  'Malang City': 'Kota Malang',
-  'Surakarta': 'Kota Surakarta',
-  'Solo': 'Kota Surakarta',
-  'Denpasar': 'Kota Denpasar',
-  'Denpasar City': 'Kota Denpasar',
-  'Pekanbaru': 'Kota Pekanbaru',
-  'Banjarmasin': 'Kota Banjarmasin',
-  'Pontianak': 'Kota Pontianak',
-  'Samarinda': 'Kota Samarinda',
-  'Balikpapan': 'Kota Balikpapan',
-  'Manado': 'Kota Manado',
-  'Padang': 'Kota Padang',
-  'Bandar Lampung': 'Kota Bandar Lampung',
-  'Serang City': 'Kota Serang',
-  'Cilegon': 'Kota Cilegon',
-  'Cimahi': 'Kota Cimahi',
-  'Tasikmalaya City': 'Kota Tasikmalaya',
-  'Cirebon City': 'Kota Cirebon',
-  'Sukabumi City': 'Kota Sukabumi',
-  'Banjar City': 'Kota Banjar',
-  'Bekasi Regency': 'Kabupaten Bekasi',
-  'Bogor Regency': 'Kabupaten Bogor',
-  'Tangerang Regency': 'Kabupaten Tangerang',
-  'Bandung Regency': 'Kabupaten Bandung',
-  'Malang Regency': 'Kabupaten Malang',
-  'Sidoarjo': 'Kabupaten Sidoarjo',
-  'Gresik': 'Kabupaten Gresik',
-  'Karawang': 'Kabupaten Karawang',
-  'Purwakarta': 'Kabupaten Purwakarta',
-  'Subang': 'Kabupaten Subang',
-  'Garut': 'Kabupaten Garut',
-  'Sukabumi Regency': 'Kabupaten Sukabumi',
-  'Cianjur': 'Kabupaten Cianjur',
-  'Indramayu': 'Kabupaten Indramayu',
-  'Majalengka': 'Kabupaten Majalengka',
-  'Kuningan': 'Kabupaten Kuningan',
-  'Cirebon Regency': 'Kabupaten Cirebon',
-  'Sumedang': 'Kabupaten Sumedang',
-  'Bandung Barat': 'Kabupaten Bandung Barat',
 };
 
 const DIRECTION_MAP = {
@@ -197,6 +153,37 @@ const JAKARTA_AREA_KEYWORDS = {
   'jaksel': 'Kota Jakarta Selatan',
 };
 
+const parseExcelDate = (value) => {
+  if (!value) return null;
+  if (value instanceof Date) return value;
+  const num = Number(value);
+  if (!isNaN(num) && num > 1000 && num < 100000) {
+    const excelEpoch = new Date(1899, 11, 30);
+    const date = new Date(excelEpoch.getTime() + num * 86400000);
+    if (!isNaN(date.getTime())) return date;
+  }
+  const str = String(value).trim();
+  const parsed = new Date(str);
+  if (!isNaN(parsed.getTime())) return parsed;
+  const parts = str.split(/[\/\-\.]/);
+  if (parts.length === 3) {
+    const [a, b, c] = parts.map(Number);
+    const attempts = [new Date(c, b - 1, a), new Date(c, a - 1, b), new Date(a, b - 1, c)];
+    for (const d of attempts) {
+      if (!isNaN(d.getTime()) && d.getFullYear() > 2000) return d;
+    }
+  }
+  return null;
+};
+
+const parseIncome = (value) => {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'number') return value;
+  const cleaned = String(value).replace(/[Rp\s]/g, '').replace(/\./g, '').replace(/,/g, '');
+  const num = Number(cleaned);
+  return isNaN(num) ? null : num;
+};
+
 const translateDirectional = (text) => {
   if (!text) return text;
   let result = text;
@@ -208,10 +195,7 @@ const translateDirectional = (text) => {
 
 const normalizeProvinsi = (raw) => {
   if (!raw) return '';
-  const cleaned = raw
-    .replace(/\s+Province$/i, '')
-    .replace(/\s+Provinsi$/i, '')
-    .trim();
+  const cleaned = raw.replace(/\s+Province$/i, '').replace(/\s+Provinsi$/i, '').trim();
   if (PROVINCE_MAP[cleaned]) return PROVINCE_MAP[cleaned];
   if (PROVINCE_MAP[raw.trim()]) return PROVINCE_MAP[raw.trim()];
   return translateDirectional(cleaned);
@@ -221,11 +205,7 @@ const normalizeKabupatenKota = (raw) => {
   if (!raw) return '';
   const trimmed = raw.trim();
   if (KABUPATEN_KOTA_MAP[trimmed]) return KABUPATEN_KOTA_MAP[trimmed];
-  const withoutSuffix = trimmed
-    .replace(/\s+City$/i, '')
-    .replace(/\s+Regency$/i, '')
-    .replace(/\s+District$/i, '')
-    .trim();
+  const withoutSuffix = trimmed.replace(/\s+City$/i, '').replace(/\s+Regency$/i, '').replace(/\s+District$/i, '').trim();
   if (KABUPATEN_KOTA_MAP[withoutSuffix]) return KABUPATEN_KOTA_MAP[withoutSuffix];
   if (/^Kota\s+/i.test(trimmed)) return 'Kota ' + trimmed.replace(/^Kota\s+/i, '').trim();
   if (/^Kabupaten\s+/i.test(trimmed)) return 'Kabupaten ' + trimmed.replace(/^Kabupaten\s+/i, '').trim();
@@ -236,16 +216,12 @@ const normalizeKabupatenKota = (raw) => {
 
 const normalizeKecamatan = (raw) => {
   if (!raw) return '';
-  return translateDirectional(
-    raw.replace(/^Kecamatan\s+/i, '').replace(/^Kec\.\s*/i, '').trim()
-  );
+  return translateDirectional(raw.replace(/^Kecamatan\s+/i, '').replace(/^Kec\.\s*/i, '').trim());
 };
 
 const normalizeKelurahan = (raw) => {
   if (!raw) return '';
-  return translateDirectional(
-    raw.replace(/^Kelurahan\s+/i, '').replace(/^Kel\.\s*/i, '').replace(/^Desa\s+/i, '').trim()
-  );
+  return translateDirectional(raw.replace(/^Kelurahan\s+/i, '').replace(/^Kel\.\s*/i, '').replace(/^Desa\s+/i, '').trim());
 };
 
 const normalizeFormattedAddress = (address) => {
@@ -254,13 +230,10 @@ const normalizeFormattedAddress = (address) => {
 };
 
 const normalizeIndonesianAddress = (components, formattedAddress) => {
-  const get = (type) =>
-    components.find((c) => c.types.includes(type))?.long_name || '';
+  const get = (type) => components.find((c) => c.types.includes(type))?.long_name || '';
   return {
     kecamatan: normalizeKecamatan(get('administrative_area_level_3')),
-    kelurahan: normalizeKelurahan(
-      get('administrative_area_level_4') || get('sublocality_level_1')
-    ),
+    kelurahan: normalizeKelurahan(get('administrative_area_level_4') || get('sublocality_level_1')),
     kabupatenKota: normalizeKabupatenKota(get('administrative_area_level_2')),
     provinsi: normalizeProvinsi(get('administrative_area_level_1')),
     formattedAddress: normalizeFormattedAddress(formattedAddress),
@@ -271,9 +244,7 @@ const extractAddressKeywords = (address) => {
   if (!address) return {};
   const lower = address.toLowerCase();
   for (const [keyword, kotaValue] of Object.entries(JAKARTA_AREA_KEYWORDS)) {
-    if (lower.includes(keyword)) {
-      return { expectedKota: kotaValue, expectedProvinsi: 'DKI Jakarta' };
-    }
+    if (lower.includes(keyword)) return { expectedKota: kotaValue, expectedProvinsi: 'DKI Jakarta' };
   }
   for (const [kecamatanName, kotaValue] of Object.entries(JAKARTA_KECAMATAN_KOTA_MAP)) {
     if (lower.includes(kecamatanName)) {
@@ -302,7 +273,7 @@ const buildFallbackFromKeywords = (addressKeywords, latitude, longitude) => {
     latitude,
     longitude,
     kecamatan: addressKeywords.expectedKecamatan
-      ? addressKeywords.expectedKecamatan.replace(/\b\w/g, c => c.toUpperCase())
+      ? addressKeywords.expectedKecamatan.replace(/\b\w/g, (c) => c.toUpperCase())
       : '',
     kelurahan: '',
     kabupatenKota: addressKeywords.expectedKota,
@@ -315,28 +286,14 @@ const buildFallbackFromKeywords = (addressKeywords, latitude, longitude) => {
 };
 
 const attemptGeocode = async (query, addressKeywords = {}) => {
-  if (!query) return null;
-  if (!GMAPS_API_KEY) return null;
+  if (!query || !GMAPS_API_KEY) return null;
   try {
-    const params = {
-      address: query,
-      key: GMAPS_API_KEY,
-      language: 'id',
-      region: 'id',
-      components: 'country:ID',
-    };
-    const { data } = await axios.get('https://maps.googleapis.com/maps/api/geocode/json', {
-      params,
-      timeout: 15000,
-    });
+    const params = { address: query, key: GMAPS_API_KEY, language: 'id', region: 'id', components: 'country:ID' };
+    const { data } = await axios.get('https://maps.googleapis.com/maps/api/geocode/json', { params, timeout: 15000 });
     if (data.status === 'REQUEST_DENIED' || data.status === 'OVER_QUERY_LIMIT') return null;
     if (data.status !== 'OK' || !data.results?.length) return null;
-
     for (const resultCandidate of data.results) {
-      const normalized = normalizeIndonesianAddress(
-        resultCandidate.address_components,
-        resultCandidate.formatted_address
-      );
+      const normalized = normalizeIndonesianAddress(resultCandidate.address_components, resultCandidate.formatted_address);
       const lat = resultCandidate.geometry.location.lat;
       const lng = resultCandidate.geometry.location.lng;
       if (!isGeocodeResultValid(normalized, addressKeywords)) {
@@ -358,7 +315,6 @@ const attemptGeocode = async (query, addressKeywords = {}) => {
         geocodeFailed: false,
       };
     }
-
     const firstResult = data.results[0];
     const lat = firstResult.geometry.location.lat;
     const lng = firstResult.geometry.location.lng;
@@ -373,39 +329,22 @@ const attemptGeocode = async (query, addressKeywords = {}) => {
 const geocodeAddress = async (address) => {
   if (!address) return null;
   const addressKeywords = extractAddressKeywords(address);
-
   let result = await attemptGeocode(address, addressKeywords);
   if (result) return result;
-
-  const simplified = address
-    .replace(/rt\s*\d+\s*/gi, '')
-    .replace(/rw\s*\d+\s*/gi, '')
-    .replace(/no\.?\s*\d+[\w-]*\s*/gi, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-
+  const simplified = address.replace(/rt\s*\d+\s*/gi, '').replace(/rw\s*\d+\s*/gi, '').replace(/no\.?\s*\d+[\w-]*\s*/gi, '').replace(/\s+/g, ' ').trim();
   if (simplified && simplified !== address) {
     result = await attemptGeocode(simplified, addressKeywords);
     if (result) return result;
   }
-
   const parts = address.split(',').map((s) => s.trim()).filter(Boolean);
   if (parts.length > 2) {
     result = await attemptGeocode(parts.slice(-3).join(', '), addressKeywords);
     if (result) return result;
   }
-
   if (parts.length > 1) {
     result = await attemptGeocode(parts.slice(-2).join(', '), addressKeywords);
     if (result) return result;
   }
-
-  if (addressKeywords.expectedKecamatan && addressKeywords.expectedProvinsi) {
-    const kecQuery = `${addressKeywords.expectedKecamatan}, ${addressKeywords.expectedKota || ''}, ${addressKeywords.expectedProvinsi}`;
-    result = await attemptGeocode(kecQuery.trim(), addressKeywords);
-    if (result) return result;
-  }
-
   return null;
 };
 
@@ -413,15 +352,22 @@ const mapExcelRow = (row) => {
   const mapped = {};
   for (const [excelKey, dbKey] of Object.entries(EXCEL_HEADER_MAP)) {
     const value = row[excelKey];
-    mapped[dbKey] = value !== undefined && value !== null ? String(value).trim() : '';
+    if (value === undefined || value === null) continue;
+    if (dbKey === 'preparationDate') {
+      mapped[dbKey] = parseExcelDate(value);
+    } else if (dbKey === 'previousIncome') {
+      mapped[dbKey] = parseIncome(value);
+    } else {
+      mapped[dbKey] = String(value).trim();
+    }
   }
+  if (!mapped.notes) mapped.notes = '';
   return mapped;
 };
 
 const checkDuplicates = async (partnersData) => {
   const duplicates = { inPayload: [], inDatabase: [], total: 0 };
   const seenPhones = new Map();
-
   partnersData.forEach((partner, index) => {
     if (!partner.phoneNumber) return;
     if (seenPhones.has(partner.phoneNumber)) {
@@ -430,7 +376,6 @@ const checkDuplicates = async (partnersData) => {
       seenPhones.set(partner.phoneNumber, index + 2);
     }
   });
-
   const phoneList = partnersData.map((p) => p.phoneNumber).filter(Boolean);
   if (phoneList.length > 0) {
     const existing = await ProspectPartner.find({ phoneNumber: { $in: phoneList } }).lean();
@@ -441,18 +386,14 @@ const checkDuplicates = async (partnersData) => {
       }
     });
   }
-
   duplicates.total = duplicates.inPayload.length + duplicates.inDatabase.length;
   return duplicates;
 };
 
 const enrichPartner = async (partner) => {
   const geoResult = await geocodeAddress(partner.domicileAddress);
-  const geo = {
-    originalAddress: partner.domicileAddress || '',
-    ...(geoResult ? geoResult : { geocodeFailed: true }),
-  };
-  return { ...partner, eligibilityStatus: 'Need Review', geo };
+  const geo = { originalAddress: partner.domicileAddress || '', ...(geoResult ? geoResult : { geocodeFailed: true }) };
+  return { ...partner, eligibilityStatus: partner.eligibilityStatus || 'Need Review', geo };
 };
 
 exports.uploadProspectPartners = async (req, res) => {
@@ -461,30 +402,16 @@ exports.uploadProspectPartners = async (req, res) => {
     if (!Array.isArray(rawData) || rawData.length === 0) {
       return res.status(400).json({ success: false, message: 'No data provided' });
     }
-
     const hasExcelHeaders = Object.keys(rawData[0]).some((k) => k in EXCEL_HEADER_MAP);
     const partnersData = hasExcelHeaders ? rawData.map(mapExcelRow) : rawData;
-
-    const invalidRows = partnersData
-      .map((p, i) => (!p.phoneNumber || p.phoneNumber.trim() === '' ? i + 2 : null))
-      .filter(Boolean);
-
+    const invalidRows = partnersData.map((p, i) => (!p.phoneNumber || String(p.phoneNumber).trim() === '' ? i + 2 : null)).filter(Boolean);
     if (invalidRows.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: `Field 'Phone_Number' wajib diisi. Data kosong di baris: ${invalidRows.join(', ')}`,
-      });
+      return res.status(400).json({ success: false, message: `Field 'Phone_Number' wajib diisi. Data kosong di baris: ${invalidRows.join(', ')}` });
     }
-
     const duplicates = await checkDuplicates(partnersData);
     if (duplicates.total > 0) {
-      return res.status(409).json({
-        success: false,
-        message: `Ditemukan ${duplicates.total} data duplikat`,
-        duplicates,
-      });
+      return res.status(409).json({ success: false, message: `Ditemukan ${duplicates.total} data duplikat`, duplicates });
     }
-
     const BATCH_SIZE = 5;
     const enriched = [];
     for (let i = 0; i < partnersData.length; i += BATCH_SIZE) {
@@ -492,15 +419,9 @@ exports.uploadProspectPartners = async (req, res) => {
       const results = await Promise.all(batch.map(enrichPartner));
       enriched.push(...results);
     }
-
     const geocodedCount = enriched.filter((p) => !p.geo.geocodeFailed).length;
     const result = await ProspectPartner.insertMany(enriched, { ordered: false });
-
-    res.status(201).json({
-      success: true,
-      message: `Berhasil mengupload ${result.length} data prospect partner (geocoded: ${geocodedCount})`,
-      data: result,
-    });
+    res.status(201).json({ success: true, message: `Berhasil mengupload ${result.length} data prospect partner (geocoded: ${geocodedCount})`, data: result });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Gagal mengupload data', error: error.message });
   }
@@ -519,36 +440,36 @@ exports.updateProspectPartner = async (req, res) => {
   try {
     const { id } = req.params;
     const updateData = { ...req.body };
-
-    if (!updateData.phoneNumber || updateData.phoneNumber.trim() === '') {
+    if (!updateData.phoneNumber || String(updateData.phoneNumber).trim() === '') {
       return res.status(400).json({ success: false, message: 'Phone Number wajib diisi' });
     }
-
     if (updateData.eligibilityStatus && !ELIGIBILITY_STATUSES.includes(updateData.eligibilityStatus)) {
       return res.status(400).json({ success: false, message: 'Status tidak valid' });
     }
-
+    if (updateData.performanceRating && !PERFORMANCE_RATINGS.includes(updateData.performanceRating)) {
+      return res.status(400).json({ success: false, message: 'Performance rating tidak valid' });
+    }
+    if (updateData.assignedTo && !ASSIGNED_TO_OPTIONS.includes(updateData.assignedTo)) {
+      return res.status(400).json({ success: false, message: 'Assigned To tidak valid' });
+    }
+    if (updateData.previousIncome !== undefined) {
+      updateData.previousIncome = parseIncome(updateData.previousIncome);
+    }
+    if (updateData.preparationDate !== undefined) {
+      updateData.preparationDate = parseExcelDate(updateData.preparationDate);
+    }
     const existing = await ProspectPartner.findById(id);
     if (!existing) return res.status(404).json({ success: false, message: 'Data tidak ditemukan' });
-
     const duplicate = await ProspectPartner.findOne({ _id: { $ne: id }, phoneNumber: updateData.phoneNumber });
     if (duplicate) {
       return res.status(409).json({ success: false, message: 'Phone Number sudah digunakan oleh data lain' });
     }
-
     const addressChanged = updateData.domicileAddress && updateData.domicileAddress !== existing.domicileAddress;
     if (addressChanged) {
       const geoResult = await geocodeAddress(updateData.domicileAddress);
-      updateData.geo = {
-        originalAddress: updateData.domicileAddress,
-        ...(geoResult || { geocodeFailed: true }),
-      };
+      updateData.geo = { originalAddress: updateData.domicileAddress, ...(geoResult || { geocodeFailed: true }) };
     }
-
-    if (!updateData.eligibilityStatus) {
-      updateData.eligibilityStatus = existing.eligibilityStatus;
-    }
-
+    if (!updateData.eligibilityStatus) updateData.eligibilityStatus = existing.eligibilityStatus;
     const updated = await ProspectPartner.findByIdAndUpdate(id, updateData, { new: true, runValidators: true });
     res.status(200).json({ success: true, message: 'Data berhasil diperbarui', data: updated });
   } catch (error) {
@@ -561,12 +482,6 @@ exports.deleteProspectPartner = async (req, res) => {
     const { id } = req.params;
     const partner = await ProspectPartner.findById(id);
     if (!partner) return res.status(404).json({ success: false, message: 'Data tidak ditemukan' });
-
-    if (partner.rejectionDocument?.path) {
-      const filePath = path.resolve(partner.rejectionDocument.path);
-      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-    }
-
     await ProspectPartner.findByIdAndDelete(id);
     res.status(200).json({ success: true, message: 'Data berhasil dihapus' });
   } catch (error) {
@@ -580,15 +495,6 @@ exports.bulkDeleteProspectPartners = async (req, res) => {
     if (!Array.isArray(ids) || ids.length === 0) {
       return res.status(400).json({ success: false, message: 'Tidak ada ID yang diberikan' });
     }
-
-    const partners = await ProspectPartner.find({ _id: { $in: ids } }).lean();
-    partners.forEach((p) => {
-      if (p.rejectionDocument?.path) {
-        const filePath = path.resolve(p.rejectionDocument.path);
-        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-      }
-    });
-
     const result = await ProspectPartner.deleteMany({ _id: { $in: ids } });
     res.status(200).json({ success: true, message: `Berhasil menghapus ${result.deletedCount} data` });
   } catch (error) {
@@ -600,7 +506,6 @@ exports.getMapDistribution = async (req, res) => {
   try {
     const { provinsi, kabupatenKota, kecamatan, eligibilityStatus, occupation, companyName, geocodeStatus } = req.query;
     const filter = {};
-
     if (geocodeStatus === 'berhasil') {
       filter['geo.geocodeFailed'] = { $ne: true };
       filter['geo.latitude'] = { $exists: true, $ne: null };
@@ -610,18 +515,15 @@ exports.getMapDistribution = async (req, res) => {
       filter['geo.latitude'] = { $exists: true, $ne: null };
       filter['geo.geocodeFailed'] = { $ne: true };
     }
-
     if (provinsi) filter['geo.provinsi'] = new RegExp(provinsi, 'i');
     if (kabupatenKota) filter['geo.kabupatenKota'] = new RegExp(kabupatenKota, 'i');
     if (kecamatan) filter['geo.kecamatan'] = new RegExp(kecamatan, 'i');
     if (eligibilityStatus) filter.eligibilityStatus = eligibilityStatus;
     if (occupation) filter.occupation = new RegExp(occupation, 'i');
     if (companyName) filter.companyName = new RegExp(companyName, 'i');
-
     const data = await ProspectPartner.find(filter)
       .select('fullName phoneNumber emailAddress occupation companyName eligibilityStatus geo')
       .lean();
-
     res.status(200).json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Gagal mengambil data distribusi', error: error.message });
@@ -651,16 +553,9 @@ exports.getMapSummary = async (req, res) => {
         { $limit: 8 },
       ]),
       ProspectPartner.countDocuments(),
-      ProspectPartner.countDocuments({
-        'geo.geocodeFailed': { $ne: true },
-        'geo.latitude': { $exists: true, $ne: null },
-      }),
+      ProspectPartner.countDocuments({ 'geo.geocodeFailed': { $ne: true }, 'geo.latitude': { $exists: true, $ne: null } }),
     ]);
-
-    res.status(200).json({
-      success: true,
-      data: { total, geocoded, byStatus, byProvinsi, byOccupation, byCompany },
-    });
+    res.status(200).json({ success: true, data: { total, geocoded, byStatus, byProvinsi, byOccupation, byCompany } });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Gagal mengambil summary', error: error.message });
   }
@@ -671,22 +566,11 @@ exports.retryGeocode = async (req, res) => {
     const { id } = req.params;
     const partner = await ProspectPartner.findById(id);
     if (!partner) return res.status(404).json({ success: false, message: 'Data tidak ditemukan' });
-
     const address = partner.domicileAddress || partner.geo?.originalAddress;
-    if (!address) {
-      return res.status(400).json({ success: false, message: 'Tidak ada alamat untuk di-geocode' });
-    }
-
+    if (!address) return res.status(400).json({ success: false, message: 'Tidak ada alamat untuk di-geocode' });
     const geoResult = await geocodeAddress(address);
-    if (!geoResult) {
-      return res.status(422).json({ success: false, message: 'Geocoding gagal untuk alamat ini' });
-    }
-
-    partner.geo = {
-      ...(partner.geo?.toObject?.() || partner.geo || {}),
-      originalAddress: address,
-      ...geoResult,
-    };
+    if (!geoResult) return res.status(422).json({ success: false, message: 'Geocoding gagal untuk alamat ini' });
+    partner.geo = { ...(partner.geo?.toObject?.() || partner.geo || {}), originalAddress: address, ...geoResult };
     await partner.save();
     res.status(200).json({ success: true, message: 'Geocoding berhasil', data: partner });
   } catch (error) {

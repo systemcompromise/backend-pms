@@ -11,18 +11,14 @@ const getBulkMitraExtendedData = async (req, res) => {
 
   req.on('close', () => {
     if (!res.writableEnded) {
-      console.log('⚠️ Client disconnected, aborting query...');
+      console.log('Client disconnected, aborting query...');
     }
   });
 
   try {
-    console.log(`📡 Request for all MitraExtended data...`);
-
     let cachedData = cacheWarmer.getCachedData('mitraExtended');
 
     if (!cachedData) {
-      console.log('📊 Cache miss - loading from database...');
-
       cachedData = await MitraExtended.find({})
         .select('-__v')
         .lean()
@@ -33,8 +29,6 @@ const getBulkMitraExtendedData = async (req, res) => {
       if (cachedData && cachedData.length > 0) {
         cacheWarmer.setCachedData('mitraExtended', cachedData);
       }
-    } else {
-      console.log(`📦 Cache hit - serving ${cachedData.length} records from cache`);
     }
 
     if (req.aborted || res.writableEnded) return;
@@ -49,7 +43,6 @@ const getBulkMitraExtendedData = async (req, res) => {
     }
 
     const duration = Date.now() - startTime;
-    console.log(`✅ Served ${cachedData.length.toLocaleString()} records in ${duration}ms`);
 
     return res.status(200).json({
       success: true,
@@ -61,7 +54,6 @@ const getBulkMitraExtendedData = async (req, res) => {
   } catch (error) {
     if (req.aborted || res.writableEnded) return;
     const duration = Date.now() - startTime;
-    console.error(`❌ Error after ${duration}ms:`, error.message);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch mitra extended data',
@@ -88,7 +80,6 @@ const manualSyncController = async (req, res) => {
       try {
         res.write(`data: ${JSON.stringify(data)}\n\n`);
       } catch (error) {
-        console.log(`⚠️ Error sending progress: ${error.message}`);
         streamClosed = true;
       }
     }
@@ -100,18 +91,16 @@ const manualSyncController = async (req, res) => {
     try {
       res.end();
     } catch (error) {
-      console.log(`⚠️ Error closing stream: ${error.message}`);
+      console.log(`Error closing stream: ${error.message}`);
     }
   };
 
   req.on('close', () => {
-    console.log(`🛑 CLIENT DISCONNECTED - Cancelling sync ${syncId}`);
     cancelSync(syncId);
     streamClosed = true;
   });
 
   req.on('error', (error) => {
-    console.log(`⚠️ Request error - cancelling sync ${syncId}:`, error.message);
     cancelSync(syncId);
     streamClosed = true;
   });
@@ -127,20 +116,7 @@ const manualSyncController = async (req, res) => {
     return closeStream();
   }
 
-  if (!process.env.RIDEBLITZ_AUTH_TOKEN) {
-    sendProgress({
-      type: 'error',
-      stage: 'error',
-      message: 'RIDEBLITZ_AUTH_TOKEN is not configured in environment variables. Please add it to your .env file.',
-      percentage: 0,
-      syncId
-    });
-    return closeStream();
-  }
-
   try {
-    console.log(`🔄 Manual sync started by ${req.user.username} (${req.user.role}) - ID: ${syncId}`);
-
     sendProgress({
       type: 'progress',
       stage: 'init',
@@ -169,19 +145,14 @@ const manualSyncController = async (req, res) => {
       syncId
     });
 
-    console.log(`✅ Sync ${syncId} completed successfully`);
     setTimeout(() => closeStream(), 500);
 
   } catch (error) {
-    console.error(`❌ Sync ${syncId} error:`, error.message);
-
     const isCancellation = error.isCancelled || error.message.includes('cancel') || streamClosed;
 
     if (!streamClosed && !res.writableEnded) {
       cacheWarmer.clearCache('mitraExtended');
-      cacheWarmer.warmMitraExtendedCache().catch(err => {
-        console.error(`❌ Cache refresh failed:`, err.message);
-      });
+      cacheWarmer.warmMitraExtendedCache().catch(() => {});
 
       if (isCancellation) {
         sendProgress({
@@ -205,9 +176,7 @@ const manualSyncController = async (req, res) => {
       setTimeout(() => closeStream(), 500);
     } else {
       cacheWarmer.clearCache('mitraExtended');
-      cacheWarmer.warmMitraExtendedCache().catch(err => {
-        console.error(`❌ Silent cache refresh failed:`, err.message);
-      });
+      cacheWarmer.warmMitraExtendedCache().catch(() => {});
     }
   }
 };
@@ -235,7 +204,6 @@ const cancelSyncEndpoint = async (req, res) => {
       return res.status(200).json({ success: true, message: `Cancelled ${cancelledCount} active sync process(es)`, cancelledCount });
     }
   } catch (error) {
-    console.error('Cancel sync error:', error);
     res.status(500).json({ success: false, message: 'Failed to cancel sync', error: error.message });
   }
 };
@@ -254,7 +222,6 @@ const getExtendedDataByDriverId = async (req, res) => {
 
     res.status(200).json({ success: true, data: extendedData });
   } catch (error) {
-    console.error('Error fetching extended data:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch extended data', error: error.message });
   }
 };
@@ -278,7 +245,6 @@ const createOrUpdateExtendedData = async (req, res) => {
 
     res.status(200).json({ success: true, message: 'Extended data saved successfully', data: extendedData });
   } catch (error) {
-    console.error('Error saving extended data:', error);
     res.status(500).json({ success: false, message: 'Failed to save extended data', error: error.message });
   }
 };
@@ -299,7 +265,6 @@ const deleteExtendedData = async (req, res) => {
 
     res.status(200).json({ success: true, message: 'Extended data deleted successfully', data: deletedData });
   } catch (error) {
-    console.error('Error deleting extended data:', error);
     res.status(500).json({ success: false, message: 'Failed to delete extended data', error: error.message });
   }
 };

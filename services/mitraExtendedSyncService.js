@@ -5,170 +5,190 @@ let fetchNikFromLark;
 try {
   const larkController = require('../controllers/larkController');
   fetchNikFromLark = larkController.fetchNikFromLark;
-  if (!fetchNikFromLark) throw new Error('fetchNikFromLark is not exported from larkController');
+  if (!fetchNikFromLark) throw new Error('fetchNikFromLark not exported');
 } catch (err) {
   console.error('Warning: larkController import failed:', err.message);
   fetchNikFromLark = async () => [];
 }
 
-const getRideblitzConfig = () => ({
-  BASE_URL: process.env.RIDEBLITZ_BASE_URL || 'https://driver-api.rideblitz.id',
-  AUTH_TOKEN: process.env.RIDEBLITZ_AUTH_TOKEN,
-  BANK_API_URL: process.env.RIDEBLITZ_BANK_API_URL || 'https://user.rideblitz.id/v1/app/users/bank_detail/drivers',
-  TIMEOUT: 30000,
-  BATCH_SIZE: 200,
-  CONCURRENT_REQUESTS: 5,
-  PAGINATION_OFFSET: 200,
-  MAX_PAGES: 500
-});
+const RIDEBLITZ_BASE_URL = process.env.RIDEBLITZ_BASE_URL || 'https://driver-api.rideblitz.id';
+const RIDEBLITZ_BANK_API_URL = process.env.RIDEBLITZ_BANK_API_URL || 'https://user.rideblitz.id/v1/app/users/bank_detail/drivers';
+const RIDEBLITZ_USERNAME = process.env.RIDEBLITZ_USERNAME || 'septa';
+const RIDEBLITZ_PASSWORD = process.env.RIDEBLITZ_PASSWORD || 'Blitz#Septa_26';
 
-const getBearerToken = () => {
-  const token = process.env.RIDEBLITZ_AUTH_TOKEN;
-  if (!token) return null;
-  return token.startsWith('Bearer ') ? token : `Bearer ${token}`;
+const PAGINATION_OFFSET = 100;
+const MAX_PAGES = 500;
+const REQUEST_TIMEOUT = 30000;
+const BATCH_SIZE = 200;
+const CONCURRENT_REQUESTS = 5;
+
+let cachedToken = null;
+
+const loginToRideblitz = async () => {
+  if (!RIDEBLITZ_USERNAME || !RIDEBLITZ_PASSWORD) {
+    throw new Error('Rideblitz credentials not configured.');
+  }
+
+  const response = await fetch(`${RIDEBLITZ_BASE_URL}/panel/login`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    },
+    body: JSON.stringify({
+      username: RIDEBLITZ_USERNAME,
+      password: RIDEBLITZ_PASSWORD
+    })
+  });
+
+  if (!response.ok) {
+    if (response.status === 401) throw new Error('Rideblitz login failed: Invalid credentials');
+    throw new Error(`Rideblitz login failed: HTTP ${response.status}`);
+  }
+
+  const data = await response.json();
+  if (!data?.result || !data?.data?.access_token) {
+    throw new Error('Rideblitz login failed: missing access_token');
+  }
+
+  cachedToken = `Bearer ${data.data.access_token}`;
+  return cachedToken;
 };
 
-class CancellationToken {
-  constructor() {
-    this.cancelled = false;
-    this.reason = null;
-  }
+const getValidToken = async () => {
+  if (!cachedToken) return await loginToRideblitz();
+  return cachedToken;
+};
 
-  cancel(reason = 'Cancelled by user') {
-    if (this.cancelled) return;
-    this.cancelled = true;
-    this.reason = reason;
-  }
+const invalidateToken = () => {
+  cachedToken = null;
+};
 
-  throwIfCancelled() {
-    if (this.cancelled) {
-      const error = new Error(this.reason || 'Operation cancelled');
-      error.isCancelled = true;
-      throw error;
-    }
-  }
+const buildDriverListUrl = (page) => {
+  const params = new URLSearchParams();
+  params.append('sort', '-1');
+  [1, 2, 8, 3, 4, 5, 6, 7].forEach(s => params.append('status', s));
+  params.append('attendance', '');
+  params.append('page', page);
+  params.append('offset', PAGINATION_OFFSET);
+  params.append('term', '');
+  params.append('app_version_name', '');
+  params.append('bank_info_provided', 'undefined');
+  return `${RIDEBLITZ_BASE_URL}/v2/panel/driver-list?${params.toString()}`;
+};
 
-  get isCancelled() {
-    return this.cancelled;
-  }
-}
+const fetchDriverListPage = async (page, token) => {
+  const url = buildDriverListUrl(page);
 
-const activeCancellationTokens = new Map();
+  const response = await axios.get(url, {
+    headers: {
+      'Authorization': token,
+      'Accept': 'application/json',
+      'Content-Type': 'application/json'
+    },
+    timeout: REQUEST_TIMEOUT
+  });
 
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+  return response.data?.data?.driver_list_response || null;
+};
 
-const formatDateTime = (dateString) => {
-  if (!dateString) return '-';
+const fetchDriverListPageWithRetry = async (page, token, cancellationToken) => {
+  cancellationToken.throwIfCancelled();
+
   try {
-    const date = new Date(dateString);
-    if (isNaN(date.getTime())) return '-';
-    const day = String(date.getDate()).padStart(2, '0');
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const year = date.getFullYear();
-    const hours = date.getHours();
-    const minutes = String(date.getMinutes()).padStart(2, '0');
-    const ampm = hours >= 12 ? 'PM' : 'AM';
-    const formattedHours = hours % 12 || 12;
-    return `${day}/${month}/${year} ${formattedHours}:${minutes}${ampm}`;
-  } catch {
-    return '-';
+    const drivers = await fetchDriverListPage(page, token);
+    return { drivers, token };
+  } catch (error) {
+    if (error.response?.status === 401) {
+      invalidateToken();
+      const freshToken = await loginToRideblitz();
+      cancellationToken.throwIfCancelled();
+      const drivers = await fetchDriverListPage(page, freshToken);
+      return { drivers, token: freshToken };
+    }
+    throw error;
   }
 };
 
 const fetchAllDriversWithPagination = async (progressCallback, cancellationToken) => {
-  const config = getRideblitzConfig();
-  const authHeader = getBearerToken();
-
-  if (!authHeader) {
-    throw new Error('RIDEBLITZ_AUTH_TOKEN environment variable is not set.');
-  }
-
   const allDrivers = [];
   let currentPage = 1;
-  const OFFSET = config.PAGINATION_OFFSET;
-  const MAX_PAGES = config.MAX_PAGES;
 
   cancellationToken.throwIfCancelled();
 
   progressCallback?.({
+    stage: 'auth',
+    message: 'Authenticating with Rideblitz...',
+    percentage: 2
+  });
+
+  let activeToken = await loginToRideblitz();
+
+  progressCallback?.({
     stage: 'rideblitz_fetch',
-    message: 'Fetching driver data from Rideblitz...',
+    message: 'Fetching driver data from Rideblitz... (Page 1)',
     percentage: 5
   });
 
   while (currentPage <= MAX_PAGES) {
-    if (cancellationToken.isCancelled) break;
+    cancellationToken.throwIfCancelled();
 
+    let result;
     try {
-      const params = new URLSearchParams();
-      params.append('sort', '-1');
-      [1, 2, 8, 3, 4, 5, 6, 7].forEach(s => params.append('status', s));
-      params.append('attendance', '');
-      params.append('page', currentPage);
-      params.append('offset', OFFSET);
-      params.append('term', '');
-      params.append('app_version_name', '');
-      params.append('bank_info_provided', 'undefined');
-
-      const response = await axios.get(`${config.BASE_URL}/v2/panel/driver-list?${params.toString()}`, {
-        headers: {
-          Authorization: authHeader,
-          Accept: 'application/json'
-        },
-        timeout: config.TIMEOUT
-      });
-
-      cancellationToken.throwIfCancelled();
-
-      if (response.data?.data?.driver_list_response) {
-        const drivers = response.data.data.driver_list_response;
-        if (drivers.length > 0) {
-          allDrivers.push(...drivers);
-          progressCallback?.({
-            stage: 'rideblitz_fetch',
-            message: `Fetched ${allDrivers.length} drivers from Rideblitz...`,
-            percentage: Math.min(15, 5 + currentPage * 0.3)
-          });
-          if (drivers.length < OFFSET) break;
-          currentPage++;
-          await sleep(200);
-        } else {
-          break;
-        }
-      } else {
-        break;
-      }
+      result = await fetchDriverListPageWithRetry(currentPage, activeToken, cancellationToken);
     } catch (error) {
       if (error.isCancelled || cancellationToken.isCancelled) break;
-      if (error.response?.status === 401) {
-        throw new Error('Rideblitz API authentication failed. Token may be expired. Please update RIDEBLITZ_AUTH_TOKEN.');
-      }
+
       if (error.response?.status === 403) {
-        throw new Error('Rideblitz API access denied. Check token permissions.');
+        throw new Error('Rideblitz API access denied. Check account permissions.');
       }
-      console.error(`Error fetching page ${currentPage}:`, error.message);
+
       if (currentPage === 1) {
         throw new Error(`Failed to fetch drivers from Rideblitz: ${error.message}`);
       }
+
       break;
     }
+
+    const { drivers, token: returnedToken } = result;
+    activeToken = returnedToken;
+
+    if (!drivers || !Array.isArray(drivers) || drivers.length === 0) {
+      break;
+    }
+
+    allDrivers.push(...drivers);
+
+    progressCallback?.({
+      stage: 'rideblitz_fetch',
+      message: `Fetching driver data... Page ${currentPage} — ${allDrivers.length} drivers collected`,
+      percentage: Math.min(18, 5 + currentPage * 0.5),
+      currentPage,
+      totalCollected: allDrivers.length
+    });
+
+    if (drivers.length < PAGINATION_OFFSET) {
+      break;
+    }
+
+    currentPage++;
+    await new Promise(r => setTimeout(r, 200));
   }
 
   return allDrivers;
 };
 
-const fetchBankDetails = async (userId, cancellationToken) => {
-  const config = getRideblitzConfig();
-  const authHeader = getBearerToken();
-  if (cancellationToken.isCancelled || !userId || !authHeader) return null;
+const fetchBankDetails = async (userId, token, cancellationToken) => {
+  if (cancellationToken.isCancelled || !userId) return null;
 
   try {
-    const response = await axios.get(`${config.BANK_API_URL}/${userId}`, {
+    const response = await axios.get(`${RIDEBLITZ_BANK_API_URL}/${userId}`, {
       headers: {
-        Authorization: authHeader,
-        Accept: 'application/json'
+        'Authorization': token,
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
       },
-      timeout: config.TIMEOUT
+      timeout: REQUEST_TIMEOUT
     });
 
     if (cancellationToken.isCancelled) return null;
@@ -186,18 +206,17 @@ const fetchBankDetails = async (userId, cancellationToken) => {
   }
 };
 
-const fetchDriverProfileFromRideblitz = async (driverId, userId, cancellationToken) => {
-  const config = getRideblitzConfig();
-  const authHeader = getBearerToken();
-  if (cancellationToken.isCancelled || !authHeader) return null;
+const fetchDriverProfileFromRideblitz = async (driverId, userId, token, cancellationToken) => {
+  if (cancellationToken.isCancelled) return null;
 
   try {
-    const response = await axios.get(`${config.BASE_URL}/panel/driver-profile/${driverId}`, {
+    const response = await axios.get(`${RIDEBLITZ_BASE_URL}/panel/driver-profile/${driverId}`, {
       headers: {
-        Authorization: authHeader,
-        Accept: 'application/json'
+        'Authorization': token,
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
       },
-      timeout: config.TIMEOUT
+      timeout: REQUEST_TIMEOUT
     });
 
     if (cancellationToken.isCancelled) return null;
@@ -212,7 +231,7 @@ const fetchDriverProfileFromRideblitz = async (driverId, userId, cancellationTok
     const ktpDoc = documents.find(d => d.fields?.key === 'ktp');
     const simDoc = documents.find(d => d.fields?.key === 'sim');
 
-    const bankDetails = await fetchBankDetails(userId, cancellationToken);
+    const bankDetails = await fetchBankDetails(userId, token, cancellationToken);
 
     return {
       driver_id: String(driverId),
@@ -262,21 +281,37 @@ const getStatusDisplay = (status) => {
   return statusMap[status?.toLowerCase()] || status || '-';
 };
 
-const processBatchProfiles = async (batchIds, driverList, larkData, cancellationToken) => {
+const formatDateTime = (dateString) => {
+  if (!dateString) return '-';
+  try {
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) return '-';
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = date.getFullYear();
+    const hours = date.getHours();
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    const formattedHours = hours % 12 || 12;
+    return `${day}/${month}/${year} ${formattedHours}:${minutes}${ampm}`;
+  } catch {
+    return '-';
+  }
+};
+
+const processBatchProfiles = async (batchIds, driverList, larkData, token, cancellationToken) => {
   if (cancellationToken.isCancelled) return [];
 
   const results = [];
-  const config = getRideblitzConfig();
-  const concurrentLimit = config.CONCURRENT_REQUESTS;
 
-  for (let i = 0; i < batchIds.length; i += concurrentLimit) {
+  for (let i = 0; i < batchIds.length; i += CONCURRENT_REQUESTS) {
     if (cancellationToken.isCancelled) break;
 
-    const concurrentBatch = batchIds.slice(i, i + concurrentLimit);
+    const concurrentBatch = batchIds.slice(i, i + CONCURRENT_REQUESTS);
     const promises = concurrentBatch.map(driverId => {
       const driverInfo = driverList.find(item => String(item.drivers?.id) === String(driverId));
       const userId = driverInfo?.drivers?.user_id;
-      return fetchDriverProfileFromRideblitz(driverId, userId, cancellationToken);
+      return fetchDriverProfileFromRideblitz(driverId, userId, token, cancellationToken);
     });
 
     const profiles = await Promise.all(promises);
@@ -369,13 +404,34 @@ const saveBatchToDatabase = async (batchProfiles, cancellationToken) => {
   return totalSaved;
 };
 
-const manualSyncMitraExtended = async (syncId, progressCallback) => {
-  const authHeader = getBearerToken();
-
-  if (!authHeader) {
-    throw new Error('RIDEBLITZ_AUTH_TOKEN is not configured. Please add it to your .env file.');
+class CancellationToken {
+  constructor() {
+    this.cancelled = false;
+    this.reason = null;
   }
 
+  cancel(reason = 'Cancelled by user') {
+    if (this.cancelled) return;
+    this.cancelled = true;
+    this.reason = reason;
+  }
+
+  throwIfCancelled() {
+    if (this.cancelled) {
+      const error = new Error(this.reason || 'Operation cancelled');
+      error.isCancelled = true;
+      throw error;
+    }
+  }
+
+  get isCancelled() {
+    return this.cancelled;
+  }
+}
+
+const activeCancellationTokens = new Map();
+
+const manualSyncMitraExtended = async (syncId, progressCallback) => {
   const startTime = Date.now();
   const cancellationToken = new CancellationToken();
   activeCancellationTokens.set(syncId, cancellationToken);
@@ -391,7 +447,7 @@ const manualSyncMitraExtended = async (syncId, progressCallback) => {
     }
 
     if (!driverList || driverList.length === 0) {
-      throw new Error('No drivers fetched from Rideblitz. Check API token and connectivity.');
+      throw new Error('No drivers fetched from Rideblitz. Check credentials and connectivity.');
     }
 
     progressCallback?.({ stage: 'lark_fetch', message: 'Fetching data from Larksuite...', percentage: 20 });
@@ -417,12 +473,11 @@ const manualSyncMitraExtended = async (syncId, progressCallback) => {
 
     progressCallback?.({ stage: 'processing', message: 'Processing driver profiles...', percentage: 35 });
 
+    const activeToken = await getValidToken();
     let processedCount = 0;
     let successCount = 0;
     let larkMatchCount = 0;
     const totalDrivers = driverIds.length;
-    const config = getRideblitzConfig();
-    const BATCH_SIZE = config.BATCH_SIZE;
 
     for (let i = 0; i < totalDrivers; i += BATCH_SIZE) {
       if (cancellationToken.isCancelled) {
@@ -433,7 +488,7 @@ const manualSyncMitraExtended = async (syncId, progressCallback) => {
       }
 
       const batchIds = driverIds.slice(i, i + BATCH_SIZE);
-      const batchProfiles = await processBatchProfiles(batchIds, driverList, larkData, cancellationToken);
+      const batchProfiles = await processBatchProfiles(batchIds, driverList, larkData, activeToken, cancellationToken);
 
       if (cancellationToken.isCancelled) {
         throw Object.assign(
@@ -462,7 +517,7 @@ const manualSyncMitraExtended = async (syncId, progressCallback) => {
       }
 
       if (i + BATCH_SIZE < totalDrivers && !cancellationToken.isCancelled) {
-        await sleep(300);
+        await new Promise(r => setTimeout(r, 300));
       }
     }
 

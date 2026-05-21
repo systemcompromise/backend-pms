@@ -18,18 +18,6 @@ const geoSchema = new mongoose.Schema(
   { _id: false }
 );
 
-const rejectionDocumentSchema = new mongoose.Schema(
-  {
-    filename: String,
-    originalName: String,
-    mimetype: String,
-    size: Number,
-    path: String,
-    uploadedAt: { type: Date, default: Date.now },
-  },
-  { _id: false }
-);
-
 const prospectPartnerSchema = new mongoose.Schema(
   {
     fullName: { type: String, trim: true },
@@ -43,14 +31,21 @@ const prospectPartnerSchema = new mongoose.Schema(
     occupation: { type: String, trim: true },
     companyName: { type: String, trim: true },
     workDuration: { type: String, trim: true },
-    pic: { type: String, trim: true },
-    reason: { type: String, trim: true, default: '' },
+    proofImage: { type: String, trim: true },
+    preparationDate: { type: Date, default: null },
+    assignedTo: { type: String, trim: true },
+    notes: { type: String, trim: true, default: '' },
+    previousIncome: { type: Number, default: null },
+    performanceRating: {
+      type: String,
+      enum: ['Basic', 'Standard', 'Advanced', 'Professional', 'Elite', ''],
+      default: '',
+    },
     eligibilityStatus: {
       type: String,
       enum: ['Eligible', 'Need Review', 'Not Eligible', 'Potential Partner'],
       default: 'Need Review',
     },
-    rejectionDocument: { type: rejectionDocumentSchema, default: null },
     geo: { type: geoSchema, default: () => ({}) },
   },
   { timestamps: true }
@@ -60,6 +55,8 @@ prospectPartnerSchema.index({ phoneNumber: 1 }, { unique: true, sparse: true });
 prospectPartnerSchema.index({ 'geo.provinsi': 1 });
 prospectPartnerSchema.index({ 'geo.kabupatenKota': 1 });
 prospectPartnerSchema.index({ eligibilityStatus: 1 });
+prospectPartnerSchema.index({ assignedTo: 1 });
+prospectPartnerSchema.index({ preparationDate: -1 });
 prospectPartnerSchema.index({ createdAt: -1 });
 
 module.exports = mongoose.model('ProspectPartner', prospectPartnerSchema);
