@@ -23,6 +23,7 @@ const phoneMessageRoutes = require("./routes/phoneMessageRoutes");
 const deliveryRoutes = require("./routes/deliveryRoutes.js");
 const merchantOrderRoutes = require("./routes/merchantOrderRoutes.js");
 const prospectPartnerRoutes = require("./routes/prospectPartnerRoutes");
+const deliveryMonitoringRoutes = require("./routes/deliveryMonitoringRoutes");
 const mitraAuthRoutes = require("./routes/mitraAuthRoutes.js");
 const blitzSyncRoutes = require("./routes/blitzSyncRoutes.js");
 const blitzProxyRoutes = require("./routes/blitzProxyRoutes.js");
@@ -36,7 +37,7 @@ const validationRoutes = require("./routes/validationRoutes");
 const app = express();
 const port = process.env.PORT || 5000;
 
-const WAHA_SERVICE_URL = process.env.WAHA_SERVICE_URL || "https://waha-production-1839.up.railway.app";
+const WAHA_SERVICE_URL = process.env.WAHA_SERVICE_URL || "http://localhost:5001";
 
 const corsOptions = {
   origin: '*',
@@ -89,6 +90,7 @@ app.use("/api/phone-message", phoneMessageRoutes);
 app.use("/api/delivery", deliveryRoutes);
 app.use("/api/merchant-orders", merchantOrderRoutes);
 app.use("/api/prospect-partners", prospectPartnerRoutes);
+app.use("/api/delivery-monitoring", deliveryMonitoringRoutes);
 app.use("/api/blitz-sync", blitzSyncRoutes);
 app.use("/api/blitz-proxy", blitzProxyRoutes);
 app.use("/api/blitz-logins", blitzLoginRoutes);
@@ -109,7 +111,7 @@ app.get("/api/health", async (req, res) => {
         method: 'GET',
         headers: {
           'Accept': 'application/json',
-          'x-api-key': process.env.WAHA_API_KEY || '1c67560aad774aa7a5f7fdf28ae01ae7'
+          'x-api-key': process.env.WAHA_API_KEY || '722514dede5e45cabef98e574c3d92d7'
         },
         signal: controller.signal
       });
