@@ -2,8 +2,8 @@ const XLSX = require("xlsx");
 const PhoneMessage = require("../models/PhoneMessage");
 const MessageLog = require("../models/MessageLog");
 
-const WAHA_SERVICE_URL = process.env.WAHA_SERVICE_URL || "http://localhost:5001";
-const WAHA_API_KEY = process.env.WAHA_API_KEY || "722514dede5e45cabef98e574c3d92d7";
+const WAHA_SERVICE_URL = process.env.WAHA_SERVICE_URL;
+const WAHA_API_KEY = process.env.WAHA_API_KEY;
 
 const MAX_BATCH_SIZE = 30;
 const MAX_RETRIES = 3;

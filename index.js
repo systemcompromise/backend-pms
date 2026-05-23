@@ -37,7 +37,7 @@ const validationRoutes = require("./routes/validationRoutes");
 const app = express();
 const port = process.env.PORT || 5000;
 
-const WAHA_SERVICE_URL = process.env.WAHA_SERVICE_URL || "http://localhost:5001";
+const WAHA_SERVICE_URL = process.env.WAHA_SERVICE_URL;
 
 const corsOptions = {
   origin: '*',
@@ -111,7 +111,7 @@ app.get("/api/health", async (req, res) => {
         method: 'GET',
         headers: {
           'Accept': 'application/json',
-          'x-api-key': process.env.WAHA_API_KEY || '722514dede5e45cabef98e574c3d92d7'
+          'x-api-key': process.env.WAHA_API_KEY
         },
         signal: controller.signal
       });
